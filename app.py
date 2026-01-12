@@ -26,7 +26,7 @@ feature_names = ["Distance_km", "Fare", "Cost_per_passenger"]
 # =====================================================
 # Load Dataset
 # =====================================================
-data = pd.read_csv("delhi_metro_updated2.0.csv")
+data = pd.read_csv("delhi_metro_updated.csv")
 data = data[['Distance_km', 'Fare', 'Cost_per_passenger', 'Passengers']].dropna()
 
 distance_arr = data["Distance_km"].values
