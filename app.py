@@ -1,141 +1,116 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
+import os
 import altair as alt
 
-# =====================================================
-# Page Configuration
-# =====================================================
-st.set_page_config(
-    page_title="Delhi Metro Passenger Prediction & Optimization (PSO)",
-    layout="wide"
-)
+# =========================
+# PAGE CONFIG
+# =========================
+st.set_page_config(page_title="PSO Multi-Objective Optimization", layout="wide")
 
-# =====================================================
-# Load PSO model and scaler (Prediction Model)
-# =====================================================
-model = joblib.load("pso_model.pkl")
-scaler = joblib.load("scaler.pkl")
+st.title("🚍 Multi-Objective Optimization using PSO")
+st.write("Objectives: **Minimize Distance and Fare**")
 
-weights = np.array(model["weights"])
-bias = float(model["bias"])
+# =========================
+# AUTO LOAD DATASET
+# =========================
+DATA_PATH = "dataset.csv"
 
-feature_names = ["Distance_km", "Fare", "Cost_per_passenger"]
+if not os.path.exists(DATA_PATH):
+    st.error("dataset.csv not found in project folder.")
+    st.stop()
 
-# =====================================================
-# Load Dataset
-# =====================================================
-data = pd.read_csv("delhi_metro_updated.csv")
-data = data[['Distance_km', 'Fare', 'Cost_per_passenger', 'Passengers']].dropna()
+data = pd.read_csv(DATA_PATH)
+data.columns = data.columns.str.lower().str.replace(" ", "_")
 
-distance_arr = data["Distance_km"].values
-fare_arr = data["Fare"].values
+required_cols = ["distance_km", "fare", "cost_per_passenger", "passengers"]
+if not all(col in data.columns for col in required_cols):
+    st.error("Dataset must contain: Distance_km, Fare, Cost_per_passenger, Passengers")
+    st.stop()
 
-# =====================================================
-# Title
-# =====================================================
-st.title("🚇 Delhi Metro Passenger Prediction & Optimization (PSO)")
+distance = data["distance_km"].values
+fare = data["fare"].values
+n = len(distance)
 
-st.markdown(
-    """
-    This application integrates **Particle Swarm Optimization (PSO)** for:
+# =========================
+# SIDEBAR PARAMETERS
+# =========================
+st.sidebar.header("⚙ PSO Parameters")
 
-    - 📊 **Passenger demand prediction** (PSO-optimized regression)
-    - 📈 **Multi-objective optimization** of **Distance and Fare**
-    """
-)
+particles = st.sidebar.slider("Number of Particles", 10, 100, 30)
+iterations = st.sidebar.slider("Iterations", 10, 300, 100)
 
-# =====================================================
-# Sidebar – User Inputs (Prediction)
-# =====================================================
-st.sidebar.header("🔢 Passenger Prediction Inputs")
+w = st.sidebar.slider("Inertia Weight (w)", 0.1, 0.9, 0.5)
+c1 = st.sidebar.slider("Cognitive Coefficient (c1)", 0.5, 3.0, 1.5)
+c2 = st.sidebar.slider("Social Coefficient (c2)", 0.5, 3.0, 1.5)
 
-distance = st.sidebar.number_input("Distance (km)", 0.0, 100.0, 12.94)
-fare = st.sidebar.number_input("Fare (₹)", 0.0, 200.0, 77.99)
-cost = st.sidebar.number_input("Cost per Passenger (₹)", 0.0, 100.0, 18.27)
+st.sidebar.subheader("Objective Weights")
+w_distance = st.sidebar.slider("Distance Weight", 0.0, 1.0, 0.6)
+w_fare = st.sidebar.slider("Fare Weight", 0.0, 1.0, 0.4)
 
-X_input = pd.DataFrame([{
-    "Distance_km": distance,
-    "Fare": fare,
-    "Cost_per_passenger": cost
-}])
+if w_distance + w_fare == 0:
+    st.sidebar.error("At least one weight must be > 0")
+    st.stop()
 
-X_scaled = scaler.transform(X_input)
+# =========================
+# FITNESS FUNCTION
+# =========================
+def fitness(i):
+    return w_distance * distance[i] + w_fare * fare[i]
 
-# =====================================================
-# Prediction
-# =====================================================
-y_pred = np.dot(X_scaled, weights) + bias
-y_pred = max(0, y_pred.item())
+# =========================
+# PSO TRAINING FUNCTION
+# =========================
+def pso_train():
+    # Initialize particles (positions are indices)
+    positions = np.random.randint(0, n, particles)
+    velocities = np.zeros(particles)
 
-# =====================================================
-# Prediction Results
-# =====================================================
-st.subheader("📊 Passenger Demand Prediction (PSO Model)")
+    pbest_positions = positions.copy()
+    pbest_scores = np.array([fitness(i) for i in positions])
 
-pcol1, pcol2, pcol3, pcol4 = st.columns(4)
+    gbest_index = pbest_positions[np.argmin(pbest_scores)]
+    gbest_score = min(pbest_scores)
 
-pcol1.metric("Distance (km)", f"{distance:.2f}")
-pcol2.metric("Fare (₹)", f"{fare:.2f}")
-pcol3.metric("Cost / Passenger (₹)", f"{cost:.2f}")
-pcol4.metric("Predicted Passengers", f"{y_pred:.2f}")
+    convergence = []
 
-# =====================================================
-# Feature Contribution & Sensitivity
-# =====================================================
-st.subheader("📈 Feature Contribution & Sensitivity Analysis")
+    for _ in range(iterations):
+        for i in range(particles):
+            r1, r2 = np.random.rand(), np.random.rand()
 
-weights_flat = weights.flatten()
-contribution_raw = X_scaled[0] * weights_flat
-total_contribution = contribution_raw.sum()
+            velocities[i] = (
+                w * velocities[i]
+                + c1 * r1 * (pbest_positions[i] - positions[i])
+                + c2 * r2 * (gbest_index - positions[i])
+            )
 
-if total_contribution != 0:
-    contribution_scaled = contribution_raw / total_contribution * y_pred
-else:
-    contribution_scaled = np.zeros_like(contribution_raw)
+            positions[i] = int(np.clip(round(positions[i] + velocities[i]), 0, n - 1))
 
-contrib_df = pd.DataFrame({
-    "Feature": feature_names,
-    "Contribution": contribution_scaled,
-    "Impact": np.abs(contribution_scaled)
-})
+            score = fitness(positions[i])
 
-c1, c2 = st.columns(2)
+            if score < pbest_scores[i]:
+                pbest_scores[i] = score
+                pbest_positions[i] = positions[i]
 
-with c1:
-    st.markdown("**Feature Contribution**")
-    st.bar_chart(contrib_df.set_index("Feature")["Contribution"])
+        gbest_index = pbest_positions[np.argmin(pbest_scores)]
+        gbest_score = min(pbest_scores)
+        convergence.append(gbest_score)
 
-with c2:
-    st.markdown("**Sensitivity Analysis**")
-    st.bar_chart(contrib_df.set_index("Feature")["Impact"])
+    return gbest_index, gbest_score, convergence
 
-# =====================================================
-# MULTI-OBJECTIVE PSO (Distance & Fare)
-# =====================================================
-st.divider()
-st.subheader("📈 Multi-Objective Optimization (Distance vs Fare)")
-
-st.markdown(
-    """
-    This section applies **PSO-inspired multi-objective analysis**
-    to identify **Pareto-optimal trade-offs** between **Distance** and **Fare**.
-    """
-)
-
-# =====================================================
-# Pareto Front Function
-# =====================================================
+# =========================
+# PARETO FRONT
+# =========================
 def pareto_front(dist, cost):
     pareto = []
     for i in range(len(dist)):
         dominated = False
         for j in range(len(dist)):
             if (
-                dist[j] <= dist[i] and
-                cost[j] <= cost[i] and
-                (dist[j] < dist[i] or cost[j] < cost[i])
+                dist[j] <= dist[i]
+                and cost[j] <= cost[i]
+                and (dist[j] < dist[i] or cost[j] < cost[i])
             ):
                 dominated = True
                 break
@@ -143,72 +118,63 @@ def pareto_front(dist, cost):
             pareto.append(i)
     return pareto
 
-pareto_idx = pareto_front(distance_arr, fare_arr)
+pareto_idx = pareto_front(distance, fare)
 
-# =====================================================
-# Pareto Front Plot
-# =====================================================
-plot_df = pd.DataFrame({
-    "Distance": distance_arr,
-    "Fare": fare_arr,
-    "Type": [
-        "Pareto-optimal" if i in pareto_idx else "Dominated"
-        for i in range(len(distance_arr))
-    ]
-})
+# =========================
+# RUN PSO
+# =========================
+if st.button("▶ Run PSO Optimization"):
+    with st.spinner("Training PSO..."):
+        best_idx, best_score, convergence = pso_train()
 
-chart = alt.Chart(plot_df).mark_circle(size=80).encode(
-    x="Distance",
-    y="Fare",
-    color=alt.Color(
-        "Type",
-        scale=alt.Scale(
-            domain=["Pareto-optimal", "Dominated"],
-            range=["red", "lightgray"]
+    st.success("Optimization Completed ✅")
+
+    # =========================
+    # RESULTS
+    # =========================
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Distance (km)", distance[best_idx])
+    col2.metric("Fare", fare[best_idx])
+    col3.metric("Fitness Score", round(best_score, 3))
+
+    st.subheader("📊 Additional Information")
+    st.write("Cost per Passenger:", data.loc[best_idx, "cost_per_passenger"])
+    st.write("Passengers:", data.loc[best_idx, "passengers"])
+
+    # =========================
+    # CONVERGENCE
+    # =========================
+    st.subheader("📉 Convergence Curve")
+    st.line_chart(convergence)
+
+    # =========================
+    # PARETO FRONT
+    # =========================
+    st.subheader("📈 Pareto Front (Distance vs Fare)")
+
+    plot_df = pd.DataFrame({
+        "Distance": distance,
+        "Fare": fare,
+        "Type": [
+            "Pareto-optimal" if i in pareto_idx else "Dominated"
+            for i in range(len(distance))
+        ]
+    })
+
+    chart = alt.Chart(plot_df).mark_circle(size=80).encode(
+        x="Distance",
+        y="Fare",
+        color=alt.Color(
+            "Type",
+            scale=alt.Scale(domain=["Pareto-optimal", "Dominated"],
+                            range=["red", "lightgray"]),
+            legend=alt.Legend(title="Solution Type")
         ),
-        legend=alt.Legend(title="Solution Type")
-    ),
-    tooltip=["Distance", "Fare", "Type"]
-)
-
-st.altair_chart(chart, use_container_width=True)
-
-st.info("🔴 Red points represent Pareto-optimal solutions.")
-
-# =====================================================
-# Dataset Preview
-# =====================================================
-st.subheader("🗂 Dataset Preview")
-
-with st.expander("Show dataset sample"):
-    st.dataframe(data.head(10))
-
-# =====================================================
-# PSO Explanation
-# =====================================================
-with st.expander("🧠 How PSO Is Used in This System"):
-    st.markdown(
-        """
-        **Prediction Module**
-        - PSO optimizes regression weights and bias
-        - Fitness function minimizes Mean Squared Error (MSE)
-
-        **Optimization Module**
-        - Distance and Fare are treated as conflicting objectives
-        - Pareto front identifies optimal trade-offs
-        - Supports decision-making without collapsing objectives
-        """
+        tooltip=["Distance", "Fare", "Type"]
     )
 
-# =====================================================
-# Conclusion
-# =====================================================
-st.subheader("✅ Conclusion")
+    st.altair_chart(chart, use_container_width=True)
+    st.info("🔴 Red points represent Pareto-optimal solutions.")
 
-st.markdown(
-    """
-    This integrated system demonstrates how **Particle Swarm Optimization**
-    can be applied to both **prediction** and **multi-objective optimization**
-    for intelligent metro transport planning.
-    """
-)
+    st.subheader("📄 Dataset Preview")
+    st.dataframe(data.head())
